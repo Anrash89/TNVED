@@ -146,15 +146,23 @@
       }
       // выводим результаты
       matches.forEach(item => {
+        // Удаляем пробелы, если они присутствуют (некоторые коды записаны через пробел)
         const codeStr = String(item.code).replace(/\s+/g, '');
-        const isMarked = markedSet.has(codeStr) || markedSet.has(codeStr.slice(0, 4)) || markedSet.has(codeStr.slice(0, 2));
+        // Проверяем, начинается ли код с какого-либо префикса из списка маркируемых
+        let requiresMark = false;
+        for (const prefix of markedSet) {
+          if (codeStr.startsWith(prefix)) {
+            requiresMark = true;
+            break;
+          }
+        }
         const div = document.createElement('div');
         div.className = 'result-item';
         div.innerHTML =
           '<span class="code">' + item.code + '</span> — ' +
           item.name +
-          '<span class="mark ' + (isMarked ? 'yes' : 'no') + '">' +
-          (isMarked ? 'Маркировка обязательна' : 'Маркировка не требуется') +
+          '<span class="mark ' + (requiresMark ? 'yes' : 'no') + '">' +
+          (requiresMark ? 'Маркировка обязательна' : 'Маркировка не требуется') +
           '</span>';
         resultsDiv.appendChild(div);
       });
