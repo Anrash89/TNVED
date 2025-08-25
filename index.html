@@ -115,6 +115,7 @@
   <script>
     let tnvedList = [];
     let markedSet = new Set();
+    let exceptionsSet = new Set();
 
     async function loadData() {
       if (!tnvedList.length) {
@@ -126,6 +127,15 @@
         const arr = await markedData.json();
         arr.forEach(code => markedSet.add(code.replace(/\s+/g, '')));
       }
+      if (exceptionsSet.size === 0) {
+        try {
+          const exceptionsData = await fetch('marked_exceptions.json');
+          const excArr = await exceptionsData.json();
+          excArr.forEach(code => exceptionsSet.add(code.replace(/\s+/g, '')));
+        } catch (e) {
+          // файл может отсутствовать – в этом случае исключений нет
+        }
+      }
     }
 
     async function search() {
@@ -136,10 +146,14 @@
       if (!query) return;
       // загружаем данные при первом поиске
       await loadData();
-      // ищем совпадения в названии
-      const matches = tnvedList.filter(item =>
-        item.name.toLowerCase().includes(query)
-      ).slice(0, 20);
+      // ищем совпадения по названию и по коду
+      const queryDigits = query.replace(/\s+/g, '');
+      const matches = tnvedList.filter(item => {
+        const nameMatch = item.name.toLowerCase().includes(query);
+        const codeStr = String(item.code).replace(/\s+/g, '');
+        const codeMatch = codeStr.includes(queryDigits);
+        return nameMatch || (queryDigits && codeMatch);
+      }).slice(0, 20);
       if (matches.length === 0) {
         resultsDiv.innerHTML = '<p>Ничего не найдено.</p>';
         return;
@@ -148,12 +162,15 @@
       matches.forEach(item => {
         // Удаляем пробелы, если они присутствуют (некоторые коды записаны через пробел)
         const codeStr = String(item.code).replace(/\s+/g, '');
-        // Проверяем, начинается ли код с какого-либо префикса из списка маркируемых
+        // Если код в исключениях, маркировка не требуется
         let requiresMark = false;
-        for (const prefix of markedSet) {
-          if (codeStr.startsWith(prefix)) {
-            requiresMark = true;
-            break;
+        if (!exceptionsSet.has(codeStr)) {
+          // Проверяем, начинается ли код с какого-либо префикса из списка маркируемых
+          for (const prefix of markedSet) {
+            if (codeStr.startsWith(prefix)) {
+              requiresMark = true;
+              break;
+            }
           }
         }
         const div = document.createElement('div');
