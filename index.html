@@ -122,6 +122,19 @@
     // Экземпляр Fuse.js для нечеткого поиска
     let fuse;
 
+    // Словарь синонимов для ключевых слов. Для каждого слова можно указать
+    // массив возможных вариантов, которые могут встречаться в названиях
+    // товаров. Этот словарь можно дополнять по мере необходимости.
+    const SYNONYMS = {
+      'губ': ['губ', 'губы', 'губн', 'для губ', 'гигиеничес', 'помад', 'бальзам', 'масло для губ'],
+      'косметика': ['косметика', 'косметич', 'косметические', 'косметическое', 'косметические средства'],
+      'канцелярии': ['канцеляр', 'канцелярск', 'канцтовар', 'принадлежности канцелярские', 'школьные принадлежности'],
+      'канцелярия': ['канцеляр', 'канцелярск', 'канцтовар', 'принадлежности канцелярские', 'школьные принадлежности'],
+      'масло': ['масло', 'масла', 'маслян', 'масляное'],
+      'обувь': ['обув', 'ботинк', 'сапог', 'туфл', 'кроссовк'],
+      // добавляйте другие категории и ключевые слова здесь
+    };
+
     async function loadData() {
       if (!tnvedList.length) {
         const tnvedData = await fetch('tnved.json');
@@ -190,6 +203,53 @@
       if (!query) return;
       // загружаем данные при первом поиске
       await loadData();
+      // сначала пытаемся найти записи, содержащие все слова запроса (или их синонимы)
+      const queryWords = query.split(/\s+/).filter(Boolean);
+      let synonymResults = [];
+      if (queryWords.length) {
+        synonymResults = tnvedList.filter(item => {
+          const nameLower = item.name.toLowerCase();
+          return queryWords.every(w => {
+            const list = SYNONYMS[w] || SYNONYMS[w.replace(/[^а-яa-z0-9]/g, '')] || [w];
+            return list.some(syn => nameLower.includes(syn));
+          });
+        }).slice(0, 30);
+      }
+      if (synonymResults && synonymResults.length) {
+        synonymResults.forEach(item => {
+          const codeStr = String(item.code).replace(/\s+/g, '');
+          let requiresMark = false;
+          if (!exceptionsSet.has(codeStr)) {
+            for (const prefix of markedSet) {
+              if (codeStr.startsWith(prefix)) {
+                requiresMark = true;
+                break;
+              }
+            }
+          }
+          const div = document.createElement('div');
+          div.className = 'result-item';
+          div.innerHTML =
+            '<span class="code">' +
+            item.code +
+            '</span> — ' +
+            item.name +
+            '<span class="mark ' +
+            (requiresMark ? 'yes' : 'no') +
+            '">' +
+            (requiresMark
+              ? 'Маркировка обязательна'
+              : 'Маркировка не требуется') +
+            '</span>';
+          div.addEventListener('click', () => {
+            document.getElementById('query').value = item.name;
+            search(true);
+          });
+          resultsDiv.appendChild(div);
+        });
+        return;
+      }
+
       // если Fuse.js загружен, используем его для fuzzy‑поиска
       if (typeof fuse !== 'undefined' && fuse) {
         const results = fuse.search(query).slice(0, 30);
