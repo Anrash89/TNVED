@@ -122,6 +122,9 @@
     // Экземпляр Fuse.js для нечеткого поиска
     let fuse;
 
+    // Инвертированный индекс: stem -> список индексов товаров. Загружается из dictionary.json.
+    let indexDict = {};
+
     // Словарь синонимов для ключевых слов. Для каждого слова можно указать
     // массив возможных вариантов, которые могут встречаться в названиях
     // товаров. Этот словарь можно дополнять по мере необходимости.
@@ -177,6 +180,16 @@
           });
         }
       }
+      // загружаем инвертированный индекс, если он ещё не загружен
+      if (Object.keys(indexDict).length === 0) {
+        try {
+          const dictData = await fetch('dictionary.json');
+          indexDict = await dictData.json();
+        } catch (e) {
+          // indexDict может отсутствовать – тогда словарь не используется
+          indexDict = {};
+        }
+      }
       if (markedSet.size === 0) {
         const markedData = await fetch('marked.json');
         const arr = await markedData.json();
@@ -203,51 +216,72 @@
       if (!query) return;
       // загружаем данные при первом поиске
       await loadData();
-      // сначала пытаемся найти записи, содержащие все слова запроса (или их синонимы)
+      // если есть инвертированный словарь, попробуем использовать его для точного поиска
       const queryWords = query.split(/\s+/).filter(Boolean);
-      let synonymResults = [];
-      if (queryWords.length) {
-        synonymResults = tnvedList.filter(item => {
-          const nameLower = item.name.toLowerCase();
-          return queryWords.every(w => {
-            const list = SYNONYMS[w] || SYNONYMS[w.replace(/[^а-яa-z0-9]/g, '')] || [w];
-            return list.some(syn => nameLower.includes(syn));
-          });
-        }).slice(0, 30);
-      }
-      if (synonymResults && synonymResults.length) {
-        synonymResults.forEach(item => {
-          const codeStr = String(item.code).replace(/\s+/g, '');
-          let requiresMark = false;
-          if (!exceptionsSet.has(codeStr)) {
-            for (const prefix of markedSet) {
-              if (codeStr.startsWith(prefix)) {
-                requiresMark = true;
-                break;
-              }
-            }
+      if (queryWords.length && Object.keys(indexDict).length) {
+        // получаем массив списков индексов для каждого корня запроса
+        const lists = [];
+        for (const w of queryWords) {
+          const clean = w.replace(/[^а-яa-z0-9]/g, '');
+          let root = '';
+          if (clean.length > 8) root = clean.slice(0, 8);
+          else if (clean.length > 5) root = clean.slice(0, 5);
+          else if (clean.length > 3) root = clean.slice(0, 3);
+          else root = clean;
+          const arr = indexDict[root];
+          if (!arr) {
+            // если хотя бы одного слова нет в словаре, прерываем поиск
+            lists.length = 0;
+            break;
           }
-          const div = document.createElement('div');
-          div.className = 'result-item';
-          div.innerHTML =
-            '<span class="code">' +
-            item.code +
-            '</span> — ' +
-            item.name +
-            '<span class="mark ' +
-            (requiresMark ? 'yes' : 'no') +
-            '">' +
-            (requiresMark
-              ? 'Маркировка обязательна'
-              : 'Маркировка не требуется') +
-            '</span>';
-          div.addEventListener('click', () => {
-            document.getElementById('query').value = item.name;
-            search(true);
-          });
-          resultsDiv.appendChild(div);
-        });
-        return;
+          lists.push(arr);
+        }
+        if (lists.length) {
+          // пересекаем списки
+          let intersection = lists[0];
+          for (let i = 1; i < lists.length; i++) {
+            const set = new Set(lists[i]);
+            intersection = intersection.filter(idx => set.has(idx));
+            if (!intersection.length) break;
+          }
+          if (intersection.length) {
+            // сортируем по размеру кода/по порядку, берём первые 30
+            const topIndexes = intersection.slice(0, 30);
+            topIndexes.forEach(idx => {
+              const item = tnvedList[idx];
+              const codeStr = String(item.code).replace(/\s+/g, '');
+              let requiresMark = false;
+              if (!exceptionsSet.has(codeStr)) {
+                for (const prefix of markedSet) {
+                  if (codeStr.startsWith(prefix)) {
+                    requiresMark = true;
+                    break;
+                  }
+                }
+              }
+              const div = document.createElement('div');
+              div.className = 'result-item';
+              div.innerHTML =
+                '<span class="code">' +
+                item.code +
+                '</span> — ' +
+                item.name +
+                '<span class="mark ' +
+                (requiresMark ? 'yes' : 'no') +
+                '">' +
+                (requiresMark
+                  ? 'Маркировка обязательна'
+                  : 'Маркировка не требуется') +
+                '</span>';
+              div.addEventListener('click', () => {
+                document.getElementById('query').value = item.name;
+                search(true);
+              });
+              resultsDiv.appendChild(div);
+            });
+            return;
+          }
+        }
       }
 
       // если Fuse.js загружен, используем его для fuzzy‑поиска
