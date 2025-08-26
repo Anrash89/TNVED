@@ -98,10 +98,10 @@
       <input
         id="query"
         type="text"
-        placeholder="Введите название товара"
-        onkeypress="if (event.key === 'Enter') search()"
+        placeholder="Введите название товара или код"
+        onkeypress="if (event.key === 'Enter') search(true)"
       />
-      <button onclick="search()">Искать</button>
+      <button onclick="search(true)">Искать</button>
     </div>
     <div id="results" class="results"></div>
     <div class="note">
@@ -121,6 +121,31 @@
       if (!tnvedList.length) {
         const tnvedData = await fetch('tnved.json');
         tnvedList = await tnvedData.json();
+        // При первой загрузке подготовим наборы "корней" (stems) для каждого
+        // элемента. Это ускорит подбор похожих товаров: мы будем сравнивать
+        // не полное слово, а только его основу. Корень строим так: если
+        // слово длиннее 7 символов, берём первые 7 символов; если длиннее
+        // 4 символов – первые 4; если длиннее 3 – первые 3; иначе слово
+        // целиком. Удаляем все символы, кроме русских и латинских букв и цифр.
+        tnvedList.forEach(item => {
+          const words = String(item.name)
+            .toLowerCase()
+            .split(/\s+/)
+            .filter(Boolean);
+          const stems = new Set();
+          words.forEach(w => {
+            const clean = w.replace(/[^а-яa-z0-9]/g, '');
+            let root = '';
+            // Корень слова: если длина больше 8, берём первые 8 символов;
+            // если больше 5 – первые 5; если больше 3 – первые 3; иначе — слово целиком.
+            if (clean.length > 8) root = clean.slice(0, 8);
+            else if (clean.length > 5) root = clean.slice(0, 5);
+            else if (clean.length > 3) root = clean.slice(0, 3);
+            else root = clean;
+            if (root) stems.add(root);
+          });
+          item._stems = stems;
+        });
       }
       if (markedSet.size === 0) {
         const markedData = await fetch('marked.json');
@@ -138,9 +163,11 @@
       }
     }
 
-    async function search() {
+    // функция поиска: если manual=false, выводим только подсказки (без сообщения "Ничего не найдено")
+    async function search(manual = true) {
       const input = document.getElementById('query');
-      const query = input.value.trim().toLowerCase();
+      const queryRaw = input.value.trim();
+      const query = queryRaw.toLowerCase();
       const resultsDiv = document.getElementById('results');
       resultsDiv.innerHTML = '';
       if (!query) return;
@@ -153,31 +180,42 @@
         const codeStr = String(item.code).replace(/\s+/g, '');
         const codeMatch = codeStr.includes(queryDigits);
         return nameMatch || (queryDigits && codeMatch);
-      }).slice(0, 20);
+      }).slice(0, 50);
       if (matches.length === 0) {
-        // если прямых совпадений нет, ищем похожие позиции по подстрокам слов
+        // если прямых совпадений нет, ищем похожие позиции по корням слов
         const words = query.split(/\s+/).filter(Boolean);
         if (words.length > 0) {
-          const stems = words.map(w => {
-            const clean = w.replace(/[^а-яa-z0-9]/g, '');
-            if (clean.length > 5) return clean.slice(0, 5);
-            if (clean.length > 3) return clean.slice(0, 3);
-            return clean;
-          }).filter(Boolean);
-          const scored = tnvedList.map(item => {
-            const name = item.name.toLowerCase();
+          // строим набор корней для запроса. Алгоритм аналогичен тому,
+          // который используется при подготовке stems для элементов.
+          const queryStems = words
+            .map(w => {
+              const clean = w.replace(/[^а-яa-z0-9]/g, '');
+              if (clean.length > 8) return clean.slice(0, 8);
+              if (clean.length > 5) return clean.slice(0, 5);
+              if (clean.length > 3) return clean.slice(0, 3);
+              return clean;
+            })
+            .filter(Boolean);
+          const scored = [];
+          tnvedList.forEach(item => {
             let score = 0;
-            stems.forEach(stem => {
-              if (name.includes(stem)) score++;
+            queryStems.forEach(stem => {
+              if (item._stems && item._stems.has(stem)) {
+                score++;
+              }
             });
-            return { item, score };
-          }).filter(x => x.score > 0);
-          scored.sort((a, b) => b.score - a.score);
-          const suggestions = scored.slice(0, 5);
-          if (suggestions.length) {
-            const hint = document.createElement('p');
-            hint.innerHTML = 'Ничего не найдено. Возможно, вы имели в виду:';
-            resultsDiv.appendChild(hint);
+            if (score > 0) scored.push({ item, score });
+          });
+          if (scored.length) {
+            scored.sort((a, b) => b.score - a.score);
+            // Возьмём больше позиций для подсказки (например, 15), чтобы
+            // пользователю было проще выбрать подходящий код.
+            const suggestions = scored.slice(0, 15);
+            const heading = document.createElement('p');
+            heading.textContent = manual
+              ? 'Ничего не найдено. Возможно, вы имели в виду:'
+              : 'Возможно, вы имели в виду:';
+            resultsDiv.appendChild(heading);
             suggestions.forEach(({ item }) => {
               const codeStr = String(item.code).replace(/\s+/g, '');
               let requiresMark = false;
@@ -192,17 +230,30 @@
               const div = document.createElement('div');
               div.className = 'result-item';
               div.innerHTML =
-                '<span class="code">' + item.code + '</span> — ' +
+                '<span class="code">' +
+                item.code +
+                '</span> — ' +
                 item.name +
-                '<span class="mark ' + (requiresMark ? 'yes' : 'no') + '">' +
-                (requiresMark ? 'Маркировка обязательна' : 'Маркировка не требуется') +
+                '<span class="mark ' +
+                (requiresMark ? 'yes' : 'no') +
+                '">' +
+                (requiresMark
+                  ? 'Маркировка обязательна'
+                  : 'Маркировка не требуется') +
                 '</span>';
+              div.addEventListener('click', () => {
+                document.getElementById('query').value = item.name;
+                search(true);
+              });
               resultsDiv.appendChild(div);
             });
             return;
           }
         }
-        resultsDiv.innerHTML = '<p>Ничего не найдено.</p>';
+        // если подсказок нет и это ручной поиск, выводим сообщение
+        if (manual) {
+          resultsDiv.innerHTML = '<p>Ничего не найдено.</p>';
+        }
         return;
       }
       // выводим найденные совпадения
@@ -228,6 +279,8 @@
         resultsDiv.appendChild(div);
       });
     }
+    // автоматически искать при каждом вводе символа и показывать подсказки
+    document.getElementById('query').addEventListener('input', () => search(false));
   </script>
 </body>
 </html>
