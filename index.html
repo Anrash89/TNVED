@@ -155,17 +155,55 @@
         return nameMatch || (queryDigits && codeMatch);
       }).slice(0, 20);
       if (matches.length === 0) {
+        // если прямых совпадений нет, ищем похожие позиции по отдельным словам
+        const words = query.split(/\s+/).filter(Boolean);
+        if (words.length > 0) {
+          const scored = tnvedList.map(item => {
+            const name = item.name.toLowerCase();
+            let score = 0;
+            words.forEach(w => {
+              if (name.includes(w)) score++;
+            });
+            return { item, score };
+          }).filter(x => x.score > 0);
+          scored.sort((a, b) => b.score - a.score);
+          const suggestions = scored.slice(0, 5);
+          if (suggestions.length) {
+            const hint = document.createElement('p');
+            hint.innerHTML = 'Ничего не найдено. Возможно, вы имели в виду:';
+            resultsDiv.appendChild(hint);
+            suggestions.forEach(({ item }) => {
+              const codeStr = String(item.code).replace(/\s+/g, '');
+              let requiresMark = false;
+              if (!exceptionsSet.has(codeStr)) {
+                for (const prefix of markedSet) {
+                  if (codeStr.startsWith(prefix)) {
+                    requiresMark = true;
+                    break;
+                  }
+                }
+              }
+              const div = document.createElement('div');
+              div.className = 'result-item';
+              div.innerHTML =
+                '<span class="code">' + item.code + '</span> — ' +
+                item.name +
+                '<span class="mark ' + (requiresMark ? 'yes' : 'no') + '">' +
+                (requiresMark ? 'Маркировка обязательна' : 'Маркировка не требуется') +
+                '</span>';
+              resultsDiv.appendChild(div);
+            });
+            return;
+          }
+        }
         resultsDiv.innerHTML = '<p>Ничего не найдено.</p>';
         return;
       }
-      // выводим результаты
+      // выводим найденные совпадения
       matches.forEach(item => {
-        // Удаляем пробелы, если они присутствуют (некоторые коды записаны через пробел)
         const codeStr = String(item.code).replace(/\s+/g, '');
-        // Если код в исключениях, маркировка не требуется
         let requiresMark = false;
         if (!exceptionsSet.has(codeStr)) {
-          // Проверяем, начинается ли код с какого-либо префикса из списка маркируемых
           for (const prefix of markedSet) {
             if (codeStr.startsWith(prefix)) {
               requiresMark = true;
