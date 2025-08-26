@@ -4,17 +4,19 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Поиск кода ТН ВЭД и проверки Честного Знака</title>
+  <!-- Подключаем Fuse.js для нечеткого поиска -->
+  <script src="https://cdn.jsdelivr.net/npm/fuse.js@6.4.6"></script>
   <style>
-    /* Базовые стили для страницы */
+    /* Базовые стили для страницы с зелёной цветовой схемой */
     body {
       font-family: Arial, sans-serif;
-      background: #f5f7fa;
+      background: #f3faf4; /* светло‑зелёный фон */
       margin: 0;
       padding: 0;
-      color: #333;
+      color: #2f4f2f; /* темно‑зелёный текст */
     }
     header {
-      background: #004a7f;
+      background: #2e8b57; /* насыщенный зелёный */
       color: #fff;
       padding: 20px 15px;
       text-align: center;
@@ -37,13 +39,14 @@
     .search-box input[type="text"] {
       flex: 1;
       padding: 12px;
-      border: 1px solid #ccc;
+      border: 1px solid #8fbc8f;
       border-radius: 4px;
       font-size: 1rem;
+      background: #f5fff7;
     }
     .search-box button {
       padding: 12px 20px;
-      background: #006bbd;
+      background: #3cb371; /* светло‑зелёная кнопка */
       color: #fff;
       border: none;
       border-radius: 4px;
@@ -52,21 +55,21 @@
       cursor: pointer;
     }
     .search-box button:hover {
-      background: #005a9c;
+      background: #339966;
     }
     .results {
       margin-top: 20px;
     }
     .result-item {
       padding: 15px;
-      border-bottom: 1px solid #eee;
+      border-bottom: 1px solid #e0ebe0;
     }
     .result-item:last-child {
       border-bottom: none;
     }
     .code {
       font-weight: bold;
-      color: #004a7f;
+      color: #2e8b57;
     }
     .mark {
       float: right;
@@ -76,18 +79,18 @@
     }
     .mark.yes {
       background: #ffefef;
-      color: #c22;
+      color: #a94442;
       border: 1px solid #e88;
     }
     .mark.no {
-      background: #eefbef;
-      color: #2a7;
+      background: #e8f8ee;
+      color: #3c763d;
       border: 1px solid #9c9;
     }
     .note {
       margin-top: 20px;
       font-size: 0.9rem;
-      color: #777;
+      color: #556b2f;
     }
   </style>
 </head>
@@ -116,6 +119,8 @@
     let tnvedList = [];
     let markedSet = new Set();
     let exceptionsSet = new Set();
+    // Экземпляр Fuse.js для нечеткого поиска
+    let fuse;
 
     async function loadData() {
       if (!tnvedList.length) {
@@ -146,6 +151,18 @@
           });
           item._stems = stems;
         });
+
+        // после загрузки списка и подготовки stems инициализируем Fuse.js для fuzzy‑поиска
+        if (typeof Fuse !== 'undefined') {
+          fuse = new Fuse(tnvedList, {
+            includeScore: true,
+            shouldSort: true,
+            threshold: 0.4,
+            ignoreLocation: true,
+            minMatchCharLength: 2,
+            keys: ['name', 'code']
+          });
+        }
       }
       if (markedSet.size === 0) {
         const markedData = await fetch('marked.json');
@@ -173,7 +190,51 @@
       if (!query) return;
       // загружаем данные при первом поиске
       await loadData();
-      // ищем совпадения по названию и по коду
+      // если Fuse.js загружен, используем его для fuzzy‑поиска
+      if (typeof fuse !== 'undefined' && fuse) {
+        const results = fuse.search(query).slice(0, 30);
+        if (!results.length) {
+          if (manual) {
+            resultsDiv.innerHTML = '<p>Ничего не найдено.</p>';
+          }
+          return;
+        }
+        results.forEach(res => {
+          const item = res.item;
+          const codeStr = String(item.code).replace(/\s+/g, '');
+          let requiresMark = false;
+          if (!exceptionsSet.has(codeStr)) {
+            for (const prefix of markedSet) {
+              if (codeStr.startsWith(prefix)) {
+                requiresMark = true;
+                break;
+              }
+            }
+          }
+          const div = document.createElement('div');
+          div.className = 'result-item';
+          div.innerHTML =
+            '<span class="code">' +
+            item.code +
+            '</span> — ' +
+            item.name +
+            '<span class="mark ' +
+            (requiresMark ? 'yes' : 'no') +
+            '">' +
+            (requiresMark
+              ? 'Маркировка обязательна'
+              : 'Маркировка не требуется') +
+            '</span>';
+          // клик по результату вставляет его название в поисковую строку и перезапускает поиск
+          div.addEventListener('click', () => {
+            document.getElementById('query').value = item.name;
+            search(true);
+          });
+          resultsDiv.appendChild(div);
+        });
+        return;
+      }
+      // если Fuse не доступен, выполняем прежний поиск по подстроке
       const queryDigits = query.replace(/\s+/g, '');
       const matches = tnvedList.filter(item => {
         const nameMatch = item.name.toLowerCase().includes(query);
@@ -181,82 +242,10 @@
         const codeMatch = codeStr.includes(queryDigits);
         return nameMatch || (queryDigits && codeMatch);
       }).slice(0, 50);
-      if (matches.length === 0) {
-        // если прямых совпадений нет, ищем похожие позиции по корням слов
-        const words = query.split(/\s+/).filter(Boolean);
-        if (words.length > 0) {
-          // строим набор корней для запроса. Алгоритм аналогичен тому,
-          // который используется при подготовке stems для элементов.
-          const queryStems = words
-            .map(w => {
-              const clean = w.replace(/[^а-яa-z0-9]/g, '');
-              if (clean.length > 8) return clean.slice(0, 8);
-              if (clean.length > 5) return clean.slice(0, 5);
-              if (clean.length > 3) return clean.slice(0, 3);
-              return clean;
-            })
-            .filter(Boolean);
-          const scored = [];
-          tnvedList.forEach(item => {
-            let score = 0;
-            queryStems.forEach(stem => {
-              if (item._stems && item._stems.has(stem)) {
-                score++;
-              }
-            });
-            if (score > 0) scored.push({ item, score });
-          });
-          if (scored.length) {
-            scored.sort((a, b) => b.score - a.score);
-            // Возьмём больше позиций для подсказки (например, 15), чтобы
-            // пользователю было проще выбрать подходящий код.
-            const suggestions = scored.slice(0, 15);
-            const heading = document.createElement('p');
-            heading.textContent = manual
-              ? 'Ничего не найдено. Возможно, вы имели в виду:'
-              : 'Возможно, вы имели в виду:';
-            resultsDiv.appendChild(heading);
-            suggestions.forEach(({ item }) => {
-              const codeStr = String(item.code).replace(/\s+/g, '');
-              let requiresMark = false;
-              if (!exceptionsSet.has(codeStr)) {
-                for (const prefix of markedSet) {
-                  if (codeStr.startsWith(prefix)) {
-                    requiresMark = true;
-                    break;
-                  }
-                }
-              }
-              const div = document.createElement('div');
-              div.className = 'result-item';
-              div.innerHTML =
-                '<span class="code">' +
-                item.code +
-                '</span> — ' +
-                item.name +
-                '<span class="mark ' +
-                (requiresMark ? 'yes' : 'no') +
-                '">' +
-                (requiresMark
-                  ? 'Маркировка обязательна'
-                  : 'Маркировка не требуется') +
-                '</span>';
-              div.addEventListener('click', () => {
-                document.getElementById('query').value = item.name;
-                search(true);
-              });
-              resultsDiv.appendChild(div);
-            });
-            return;
-          }
-        }
-        // если подсказок нет и это ручной поиск, выводим сообщение
-        if (manual) {
-          resultsDiv.innerHTML = '<p>Ничего не найдено.</p>';
-        }
+      if (!matches.length) {
+        if (manual) resultsDiv.innerHTML = '<p>Ничего не найдено.</p>';
         return;
       }
-      // выводим найденные совпадения
       matches.forEach(item => {
         const codeStr = String(item.code).replace(/\s+/g, '');
         let requiresMark = false;
