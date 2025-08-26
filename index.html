@@ -155,14 +155,20 @@
         return nameMatch || (queryDigits && codeMatch);
       }).slice(0, 20);
       if (matches.length === 0) {
-        // если прямых совпадений нет, ищем похожие позиции по отдельным словам
+        // если прямых совпадений нет, ищем похожие позиции по подстрокам слов
         const words = query.split(/\s+/).filter(Boolean);
         if (words.length > 0) {
+          const stems = words.map(w => {
+            const clean = w.replace(/[^а-яa-z0-9]/g, '');
+            if (clean.length > 5) return clean.slice(0, 5);
+            if (clean.length > 3) return clean.slice(0, 3);
+            return clean;
+          }).filter(Boolean);
           const scored = tnvedList.map(item => {
             const name = item.name.toLowerCase();
             let score = 0;
-            words.forEach(w => {
-              if (name.includes(w)) score++;
+            stems.forEach(stem => {
+              if (name.includes(stem)) score++;
             });
             return { item, score };
           }).filter(x => x.score > 0);
